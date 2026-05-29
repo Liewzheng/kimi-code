@@ -154,7 +154,7 @@ describe('ApiKeyPool', () => {
 
     it('is a no-op for unknown keys', () => {
       const pool = new ApiKeyPool(['a']);
-      expect(() => pool.recordFailure('unknown')).not.toThrow();
+      expect(() => { pool.recordFailure('unknown'); }).not.toThrow();
       expect(pool.acquire()).toBe('a');
     });
   });
@@ -170,7 +170,7 @@ describe('ApiKeyPool', () => {
 
     it('is a no-op for unknown keys', () => {
       const pool = new ApiKeyPool(['a']);
-      expect(() => pool.resetKey('unknown')).not.toThrow();
+      expect(() => { pool.resetKey('unknown'); }).not.toThrow();
     });
   });
 });

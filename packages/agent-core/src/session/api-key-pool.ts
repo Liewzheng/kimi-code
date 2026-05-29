@@ -20,8 +20,8 @@ const COOLDOWN_MS = [30_000, 300_000, 1_800_000] as const;
 
 function cooldownForFailures(failures: number): number {
   if (failures <= 0) return 0;
-  if (failures <= COOLDOWN_MS.length) return COOLDOWN_MS[failures - 1]!;
-  return COOLDOWN_MS[COOLDOWN_MS.length - 1]!;
+  if (failures <= COOLDOWN_MS.length) return COOLDOWN_MS.at(failures - 1)!;
+  return COOLDOWN_MS.at(-1)!;
 }
 
 export class ApiKeyPool {
