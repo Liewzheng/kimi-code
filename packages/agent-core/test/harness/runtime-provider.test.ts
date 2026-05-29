@@ -780,6 +780,90 @@ describe('ProviderManager key pool', () => {
     expect(auth).toBeUndefined();
   });
 
+  it('rotates keys correctly under concurrent resolveAuth calls', async () => {
+    const pool = new ApiKeyPool(['pk-a', 'pk-b', 'pk-c']);
+    const manager = new ProviderManager({ config: BASE_CONFIG, apiKeyPool: pool });
+    const withAuth = manager.resolveAuth('kimi-code/kimi-for-coding')!;
+
+    const keys: string[] = [];
+    const requests = Array.from({ length: 5 }, async () => {
+      await withAuth(async (auth: ProviderRequestAuth) => {
+        keys.push(auth.apiKey!);
+        // Small async gap so the event loop can interleave other requests.
+        await new Promise<void>((r) => { setTimeout(r, 1); });
+        return 'ok';
+      });
+    });
+    await Promise.all(requests);
+
+    expect(keys).toEqual(['pk-a', 'pk-b', 'pk-c', 'pk-a', 'pk-b']);
+  });
+
+  it('distributes keys evenly under 60 concurrent withAuth requests', async () => {
+    const pool = new ApiKeyPool(['pk-0', 'pk-1', 'pk-2']);
+    const manager = new ProviderManager({ config: BASE_CONFIG, apiKeyPool: pool });
+    const withAuth = manager.resolveAuth('kimi-code/kimi-for-coding')!;
+
+    const keys: string[] = [];
+    await Promise.all(
+      Array.from({ length: 60 }, () =>
+        withAuth(async (auth: ProviderRequestAuth) => {
+          keys.push(auth.apiKey!);
+          return 'ok';
+        }),
+      ),
+    );
+
+    const counts = new Map<string, number>();
+    for (const k of keys) {
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    expect(counts.get('pk-0')).toBe(20);
+    expect(counts.get('pk-1')).toBe(20);
+    expect(counts.get('pk-2')).toBe(20);
+  });
+
+  it('cools down failed keys and reroutes under concurrent load', async () => {
+    const pool = new ApiKeyPool(['pk-good', 'pk-bad']);
+    const manager = new ProviderManager({ config: BASE_CONFIG, apiKeyPool: pool });
+    const withAuth = manager.resolveAuth('kimi-code/kimi-for-coding')!;
+
+    let callIndex = 0;
+    const keys: string[] = [];
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, () =>
+        withAuth(async (auth: ProviderRequestAuth) => {
+          keys.push(auth.apiKey!);
+          const idx = callIndex++;
+          // First 10 calls: even-indexed requests (0,2,4,6,8) get pk-good and succeed,
+          // odd-indexed get pk-bad and throw 429. Because acquire() is round-robin,
+          // the exact key depends on starting state, so we simulate by key value.
+          if (auth.apiKey === 'pk-bad') {
+            throw new APIStatusError(429, 'Too Many Requests');
+          }
+          return 'success';
+        }),
+      ),
+    );
+
+    // All pk-bad requests should have failed; pk-good should succeed.
+    const badCount = keys.filter((k) => k === 'pk-bad').length;
+    const goodCount = keys.filter((k) => k === 'pk-good').length;
+    expect(badCount).toBe(10);
+    expect(goodCount).toBe(10);
+
+    const failures = results.filter((r) => r.status === 'rejected').length;
+    const successes = results.filter((r) => r.status === 'fulfilled').length;
+    expect(failures).toBe(10);
+    expect(successes).toBe(10);
+
+    // After failures, pk-bad should be in cooldown.
+    const nextKey = pool.acquire();
+    // Round-robin: after 20 calls index is at 0 again. pk-bad had 10 failures -> cooldown.
+    // It should be skipped, so next acquire returns pk-good.
+    expect(nextKey).toBe('pk-good');
+  });
+
   it('prefers OAuth over key pool when both are configured', async () => {
     const pool = new ApiKeyPool(['pk-1']);
     const config: KimiConfig = {

@@ -173,4 +173,70 @@ describe('ApiKeyPool', () => {
       expect(() => { pool.resetKey('unknown'); }).not.toThrow();
     });
   });
+
+  describe('concurrent stress', () => {
+    it('distributes 100 concurrent acquires evenly across 3 keys', async () => {
+      const pool = new ApiKeyPool(['k0', 'k1', 'k2']);
+      const keys = await Promise.all(Array.from({ length: 100 }, () => Promise.resolve(pool.acquire())));
+
+      expect(keys).toHaveLength(100);
+      const counts = new Map<string, number>();
+      for (const k of keys) {
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+      // Round-robin over 3 keys -> 33, 34, 33 in order
+      expect(counts.get('k0')).toBe(34);
+      expect(counts.get('k1')).toBe(33);
+      expect(counts.get('k2')).toBe(33);
+    });
+
+    it('skips cooling keys even under 50 concurrent acquires', async () => {
+      vi.useFakeTimers();
+      const pool = new ApiKeyPool(['k0', 'k1', 'k2']);
+      pool.recordFailure('k1'); // 30s cooldown
+
+      const keys = await Promise.all(Array.from({ length: 50 }, () => Promise.resolve(pool.acquire())));
+
+      const counts = new Map<string, number>();
+      for (const k of keys) {
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+      expect(counts.get('k0')).toBe(25);
+      expect(counts.get('k1') ?? 0).toBe(0); // skipped entirely
+      expect(counts.get('k2')).toBe(25);
+    });
+
+    it('falls back to all keys when every key is cooling under heavy load', async () => {
+      vi.useFakeTimers();
+      const pool = new ApiKeyPool(['k0', 'k1']);
+      pool.recordFailure('k0');
+      pool.recordFailure('k1');
+
+      const keys = await Promise.all(Array.from({ length: 20 }, () => Promise.resolve(pool.acquire())));
+
+      const counts = new Map<string, number>();
+      for (const k of keys) {
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+      // Fallback to round-robin across entire pool despite cooldown
+      expect(counts.get('k0')).toBe(10);
+      expect(counts.get('k1')).toBe(10);
+    });
+
+    it('recovers a key mid-stream after cooldown expires', async () => {
+      vi.useFakeTimers();
+      const pool = new ApiKeyPool(['k0', 'k1']);
+      pool.recordFailure('k0'); // 30s cooldown
+
+      const firstBatch = await Promise.all(Array.from({ length: 10 }, () => Promise.resolve(pool.acquire())));
+      expect(firstBatch.every((k) => k === 'k1')).toBe(true);
+
+      vi.advanceTimersByTime(30_001);
+
+      const secondBatch = await Promise.all(Array.from({ length: 10 }, () => Promise.resolve(pool.acquire())));
+      // After cooldown, k0 is back in rotation
+      expect(secondBatch.filter((k) => k === 'k0').length).toBe(5);
+      expect(secondBatch.filter((k) => k === 'k1').length).toBe(5);
+    });
+  });
 });
