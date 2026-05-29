@@ -145,7 +145,7 @@ export class KimiCore implements PromisableMethods<CoreAPI> {
     this.resolveOAuthTokenProvider = options.resolveOAuthTokenProvider;
     this.skillDirs = options.skillDirs ?? [];
     this.telemetry = options.telemetry ?? noopTelemetryClient;
-    this.apiKeyPool = ApiKeyPool.fromEnv() ?? undefined;
+    this.apiKeyPool = process.env['KIMI_API_KEY_POOL'] !== undefined ? (ApiKeyPool.fromEnv() ?? undefined) : undefined;
     ensureKimiHome(this.homeDir);
     this.config = readConfigFile(this.configPath);
     this.sessionStore = new SessionStore(this.homeDir);
