@@ -49,13 +49,13 @@ $LauncherPath = Join-Path $BinDir 'kimiteam.ps1'
 # ---------------------------------------------------------------------------
 # Pre-flight: node >= 24
 # ---------------------------------------------------------------------------
-$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+$nodeCmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
 if ($null -eq $nodeCmd) {
-  Write-Host 'ERROR: node not found in PATH. Install Node.js >= 24 from https://nodejs.org/ or via your package manager.' -ForegroundColor Red
+  Write-Host 'ERROR: no node executable found (Application type; aliases/functions do not count). Install Node.js >= 24 from https://nodejs.org/ or via your package manager.' -ForegroundColor Red
   exit 1
 }
 
-$nodeVersion = & node --version   # e.g. v24.15.0
+$nodeVersion = & $nodeCmd --version   # e.g. v24.15.0
 $nodeMajor = 0
 if ($nodeVersion -match '^v(\d+)') {
   $nodeMajor = [int]$Matches[1]
@@ -151,7 +151,13 @@ if (Test-Path -LiteralPath $DistWebDir) {
 }
 New-Item -ItemType Directory -Force -Path $DistWebDir | Out-Null
 Write-Host "Extracting ${DistWebZipName} to $DistWebDir ..."
-Expand-Archive -LiteralPath (Join-Path $LibDir $DistWebZipName) -DestinationPath $DistWebDir
+# Fully-qualify the built-in cmdlet: if Pscx (PowerShell Community Extensions)
+# is installed, its same-named Expand-Archive (parameter sets EntryPath/
+# OutputPath, no -DestinationPath) auto-loads first in PSModulePath order,
+# shadowing the built-in Microsoft.PowerShell.Archive\Expand-Archive and
+# making this line fail - it must stay fully qualified; do not revert to the
+# bare name.
+Microsoft.PowerShell.Archive\Expand-Archive -LiteralPath (Join-Path $LibDir $DistWebZipName) -DestinationPath $DistWebDir
 Write-Host 'Installed dist-web assets.'
 
 # Drop the zip; keep the small .sha256 record next to main-team.cjs.sha256.
@@ -176,13 +182,22 @@ if (-not (Test-Path -LiteralPath $PackageJsonPath)) {
 # ---------------------------------------------------------------------------
 # Write launcher (ASCII-only, no BOM)
 # ---------------------------------------------------------------------------
+# The node path is baked in at install time: pre-flight verified $nodeCmd is an
+# Application-type node, so we take its absolute path via .Path and expand it
+# into the launcher at generation time.  The launcher does NOT re-resolve node
+# from PATH at runtime - this prevents PATH shadowing/hijack (a different node
+# earlier in PATH at runtime does not take effect) and also prevents version
+# managers (e.g. nvm) whose PATH additions are not persisted from leaving the
+# launcher unable to find node.
+# NOTE: if node moves or is replaced later, re-run this installer.
 $launcherContent = @"
 `$env:KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL = '1'
 `$env:KIMI_CODE_EXPERIMENTAL_FLAG = '1'
 `$env:KIMI_CODE_TEAM_MODE = '1'
 `$env:KIMI_CODE_BIN_NAME = 'kimiteam'
-& node "`$HOME\.kimi-code\lib\kimi\main-team.cjs" @args
+& '__NODE_PATH__' "`$HOME\.kimi-code\lib\kimi\main-team.cjs" @args
 "@
+$launcherContent = $launcherContent.Replace('__NODE_PATH__', $nodeCmd.Path)
 [System.IO.File]::WriteAllText($LauncherPath, $launcherContent, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Installed launcher: $LauncherPath"
 
