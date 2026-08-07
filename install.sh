@@ -193,12 +193,18 @@ cat > "${LAUNCHER_PATH}" << 'LAUNCHER_EOF'
 # KIMI_BUNDLE points to the team-built bundle.
 set -eu
 KIMI_BUNDLE="__LIB_DIR__/main-team.cjs"
+# Advertise the actual launcher name in resume hints instead of the hardcoded
+# "kimi" (the 5 CLI resume-hint sites fall back to 'kimi' when this is unset).
+export KIMI_CODE_BIN_NAME=kimiteam
 # Enable the experimental secondary-model feature (subagent model, /secondary_model).
 export KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1
 # Enable the agent-core-v2 engine (subagent team tools: TeamHire/TeamFire/
 # TeamScore/TeamMessage/TeamConcurrency, arbitrary subagent model ids,
 # session-wide subagent concurrency pool).
 export KIMI_CODE_EXPERIMENTAL_FLAG=1
+# Start in team mode by default. Users can /team off or set
+# [subagent] team_mode = false in config.toml to override (config wins).
+export KIMI_CODE_TEAM_MODE=1
 exec node "$KIMI_BUNDLE" "$@"
 LAUNCHER_EOF
 
