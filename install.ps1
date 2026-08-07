@@ -21,6 +21,9 @@ $ErrorActionPreference = 'Stop'
 # This script ONLY manages:
 #   $HOME\.kimi-code\bin\kimiteam.ps1          (the team-build launcher)
 #   $HOME\.kimi-code\lib\kimi\main-team.cjs    (the team-build CJS bundle)
+#   $HOME\.kimi-code\lib\kimi\dist-web\        (fork web assets served by kimiteam)
+#   $HOME\.kimi-code\lib\kimi\*.sha256         (checksum records; the zips are removed)
+#   $HOME\.kimi-code\lib\kimi\package.json     (written only when missing; kept if present)
 #
 # It MUST NOT read, write, or delete:
 #   $HOME\.kimi-code\bin\kimi
@@ -38,6 +41,9 @@ $BinDir = Join-Path $InstallDir 'bin'
 $BundleName = 'main-team.cjs'
 $BundlePath = Join-Path $LibDir $BundleName
 $Sha256File = 'main-team.cjs.sha256'
+$DistWebZipName = 'dist-web.zip'
+$DistWebZipSha256File = 'dist-web.zip.sha256'
+$DistWebDir = Join-Path $LibDir 'dist-web'
 $LauncherPath = Join-Path $BinDir 'kimiteam.ps1'
 
 # ---------------------------------------------------------------------------
@@ -106,6 +112,66 @@ if ($expectedHash -ne $actualHash) {
   exit 1
 }
 Write-Host "sha256 checksum OK: ${actualHash}"
+
+# ---------------------------------------------------------------------------
+# Download dist-web.zip + sha256
+# ---------------------------------------------------------------------------
+Write-Host "Downloading ${DistWebZipName} from ${BaseUrl}/..."
+Invoke-WebRequest -Uri "${BaseUrl}/${DistWebZipName}" -OutFile (Join-Path $LibDir $DistWebZipName) -UseBasicParsing
+Write-Host "Downloaded $(Join-Path $LibDir $DistWebZipName)"
+
+Write-Host "Downloading ${DistWebZipSha256File}..."
+Invoke-WebRequest -Uri "${BaseUrl}/${DistWebZipSha256File}" -OutFile (Join-Path $LibDir $DistWebZipSha256File) -UseBasicParsing
+
+# ---------------------------------------------------------------------------
+# Verify dist-web.zip sha256 (same pattern as the bundle)
+# ---------------------------------------------------------------------------
+Write-Host 'Verifying dist-web.zip sha256 checksum...'
+$expectedWebHash = ((Get-Content -LiteralPath (Join-Path $LibDir $DistWebZipSha256File) -TotalCount 1) -split '\s+')[0]
+$actualWebHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $LibDir $DistWebZipName)).Hash
+if ($expectedWebHash -ne $actualWebHash) {
+  Write-Host 'ERROR: dist-web.zip sha256 mismatch!' -ForegroundColor Red
+  Write-Host "  Expected: ${expectedWebHash}" -ForegroundColor Red
+  Write-Host "  Actual:   ${actualWebHash}" -ForegroundColor Red
+  exit 1
+}
+Write-Host "dist-web.zip sha256 checksum OK: ${actualWebHash}"
+
+# ---------------------------------------------------------------------------
+# Back up and install dist-web (fork web assets)
+# ---------------------------------------------------------------------------
+# The zip's top level IS the dist-web content (index.html + assets/), so it
+# unzips directly into $DistWebDir.
+if (Test-Path -LiteralPath $DistWebDir) {
+  $webTimestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $webBackupName = "dist-web.bak-${webTimestamp}"
+  Copy-Item -LiteralPath $DistWebDir -Destination (Join-Path $LibDir $webBackupName) -Recurse
+  Write-Host "Backed up existing dist-web to $LibDir\$webBackupName"
+  Remove-Item -LiteralPath $DistWebDir -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $DistWebDir | Out-Null
+Write-Host "Extracting ${DistWebZipName} to $DistWebDir ..."
+Expand-Archive -LiteralPath (Join-Path $LibDir $DistWebZipName) -DestinationPath $DistWebDir
+Write-Host 'Installed dist-web assets.'
+
+# Drop the zip; keep the small .sha256 record next to main-team.cjs.sha256.
+Remove-Item -LiteralPath (Join-Path $LibDir $DistWebZipName) -Force
+
+# ---------------------------------------------------------------------------
+# Ensure package.json marker (required for webAssetsDir resolution)
+# ---------------------------------------------------------------------------
+# The runtime resolves dist-web by walking up from the bundle (version.ts
+# looks for a package.json within 6 levels); without one in $LibDir the web
+# server runs API-only and `kimi web` returns 404 on GET /.  If the official
+# kimi already left a package.json here, keep it untouched - our fork dist-web
+# already overlays that directory, so the semantics are unchanged either way.
+$PackageJsonPath = Join-Path $LibDir 'package.json'
+if (-not (Test-Path -LiteralPath $PackageJsonPath)) {
+  Set-Content -LiteralPath $PackageJsonPath -Value '{"name":"kimiteam","version":"0.33.0","type":"commonjs"}' -Encoding ASCII -NoNewline
+  Write-Host "Wrote minimal package.json marker: $PackageJsonPath"
+} else {
+  Write-Host "package.json already exists, kept untouched: $PackageJsonPath"
+}
 
 # ---------------------------------------------------------------------------
 # Write launcher (ASCII-only, no BOM)
